@@ -1,0 +1,300 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no' />
+  <meta charset=utf-8 />
+  <title>Distance map</title>
+  <link rel='shortcut icon' href='path/to/favicon.ico' type='image/x-icon' />
+  <script src='https://api.mapbox.com/mapbox.js/v2.4.0/mapbox.js'></script>
+  <script src='https://npmcdn.com/@turf/turf@3.5.1/turf.min.js'></script>
+  <script   src="https://code.jquery.com/jquery-2.2.4.min.js"   integrity="sha256-BbhdlvQf/xTY9gja0Dq3HiwQF8LaCRTXxZKRutelT44="   crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-ajax/2.1.0/leaflet.ajax.js"></script>
+  <link href='https://api.mapbox.com/mapbox.js/v2.4.0/mapbox.css' rel='stylesheet' />
+  <script src='https://api.mapbox.com/mapbox.js/plugins/turf/v1.3.0/turf.min.js'></script>
+
+<style>
+  body { margin:0; padding:0; }
+  #map { position:absolute; top:0; bottom:0; width:100%; }
+.map-overlay {
+    font:bold 12px/20px 'Helvetica Neue', Arial, Helvetica, sans-serif;
+    position: absolute;
+    width: 25%;
+    bottom: 3%;
+    left: 0;
+    padding: 10px;
+}
+
+.map-overlay .map-overlay-inner {
+    background-color: #fff;
+    box-shadow:0 1px 2px rgba(0, 0, 0, 0.20);
+    border-radius: 3px;
+    padding: 10px;
+    margin-bottom: 10px;
+}
+
+.map-overlay label {
+    display: block;
+    margin: 0 0 10px;
+}
+
+.map-overlay input {
+    background-color: transparent;
+    display: inline-block;
+    width: 100%;
+    position: relative;
+    margin: 0;
+    cursor: ew-resize;
+}
+
+.large {
+	font-size: 2em;
+}
+.legend {
+    text-align: left;
+    line-height: 18px;
+    color: #555;
+}
+.legend i {
+    width: 18px;
+    height: 18px;
+    float: left;
+    margin-right: 8px;
+    opacity: 0.7;
+}
+.legend .colorcircle {
+    border-radius: 50%;
+    width: 15px;
+    height: 15px;
+    margin-top: 0px;
+}
+
+
+#venue-count {
+	color: green;
+}
+
+
+</style>
+</head>
+<body>
+<div id='map'></div>
+    <div class='map-overlay top'>
+    <div class='map-overlay-inner'>
+        <label>Radius: <span id='slider-value'></span></label>
+        <input id='slider' type='range' min='20' max='60' step='10' value='20' />
+    </div>
+    <div class='map-overlay-inner'>
+        <label>Intensity: <span id='slider-value2'></span></label>
+        <input id='slider2' type='range' min='0' max='1' step='0.1' value='1' />
+    </div>
+    </div>
+</div>
+<script>
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//Sets up the map that we start with
+L.mapbox.accessToken = 'pk.eyJ1IjoidGhlbWl1cmdvIiwiYSI6ImNpdXpyamltODAwMmwyenIzZmY3OXp5bnoifQ.d1JhASnZAAT1xPSJyX9nXA';
+var map = L.mapbox.map('map', 'mapbox.streets').setView([54.4, -7], 6);
+//Adds a scale to the map in metric units
+L.control.scale({position:'topright', imperial:false}).addTo(map);
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+//slider refers to the document element with the Id slider
+var slider = document.getElementById('slider');
+var sliderValue = document.getElementById('slider-value');
+var slider2 = document.getElementById('slider2');
+var sliderValue2 = document.getElementById('slider-value2');
+
+
+//This sets up the bounding box for the hexagonal grid
+var bbox = [-8.61726  , 49.88287,  1.763026, 60.844887];
+var cellWidth = 0.1;
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////
+//The variables and functions below define the characteristics of the hexagon grid
+
+// y < 1 ? '#ffffe9' :
+// y < 2 ? '#edf8b1' :  
+
+
+//Code to color in the map
+//create color ramp
+function getColor(y) {
+    return y == undefined ? '#888' :
+          
+           y < 5 ? '#edf8b1' :
+           y < 10 ? '#c7e9b4' :
+           y < 20 ? '#7fcdbb' :
+           y < 50 ? '#41b6c4' :
+           y < 100 ? '#1d91c0'  :
+           y < 150 ? '#225ea8' :
+           y < 200 ? '#0c2c84':
+                      '#e34a33';
+}
+
+
+/* function getColor(y) {
+    return y == undefined ? '#888' :
+           y < 1 ? '#fff7fb' :
+           y < 2 ? '#ece7f2' :
+           y < 5 ? '#d0d1e6' :
+           y < 10 ? '#a6bddb' :
+           y < 20 ? '#74a9cf' :
+           y < 50 ? '#3690c0' :
+           y < 100 ? '#0570b0':
+           y < 150 ? '#045a8d' :
+                      '#023858';
+//Tried this function didn't look quite good enough
+}
+
+*/
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//Adds the legend
+var hexlegend = L.control({
+    position: 'topright'
+});
+//generate legend contents
+hexlegend.onAdd = function (map) {
+	//set up legend grades and labels
+    var div = L.DomUtil.create('div', 'info legend'),
+        grades = [1,5, 10, 20, 50, 100, 150, 200],
+        labels = ['<strong>Number of museums</strong>'],
+        from, to;
+    
+	//iterate through grades and create a color field and label for each
+    for (var i = 0; i < grades.length; i++) {
+        from = grades[i];
+        to = grades[i + 1];
+        labels.push(
+            '<i style="background:' + getColor(from + 0.5) + '"></i> ' + from + (to ? '&ndash;' + to : '+'));
+    }
+    div.innerHTML = labels.join('<br>');
+    return div;
+};
+//Adds the legend to the map
+hexlegend.addTo(map);
+
+
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////
+// The styling functions
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//The code below handles the styling of the grid 
+//highlight style
+var hexStyleHighlight = {
+    color: "#336",
+    weight: 2,
+    fillOpacity:0.5,
+    opacity: 0.7,
+};
+
+
+
+var hexgrid;
+///////////////////////////////////////////////////////////////////////////////////////////////////////////
+//The mapper function below takes y the radius information selects the corresponding geojson properties and
+// plots them on the map
+
+function mapper(y){
+
+
+function style(feature) {
+	return {
+        //Updates the color of the cells depending on the radius used
+        fillColor:getColor(feature.properties[String(str1.concat(String(y)))]),
+    	color: "#888",
+    	weight: 0.9,
+        fillOpacity:1,
+    	opacity: 1,
+	};
+}
+
+
+//attach styles and popups to the hex layer
+function highlightHex(e) {
+    var layer = e.target;
+    layer.setStyle(hexStyleHighlight);
+    if (!L.Browser.ie && !L.Browser.opera) {
+        layer.bringToFront();
+    }
+}
+
+function resetHexHighlight(e) {
+    var layer = e.target;
+    var hexStyleDefault=style(layer.feature);
+    layer.setStyle(hexStyleDefault);
+}
+
+
+function onEachHex(feature, layer) {
+    str1="kmpop"; 
+    //Calls the highlightHex function when the mouse      
+    layer.on({
+        mouseover: highlightHex,
+        mouseout: resetHexHighlight
+    });
+    //Sets up the default style
+    var hexStyleDefault=style(layer.feature);
+    // Applies the style to the layer
+    layer.setStyle(hexStyleDefault);
+    //for the sake of grammar
+    if (feature.properties[String(str1.concat(String(y)))] == 1) {
+        var be_verb = "There is";
+        var point_s = "museum";
+    } else {
+        var be_verb = "There are";
+        var point_s = "museums";
+    }
+        layer.bindPopup(be_verb+' <b>'+ feature.properties[String(str1.concat(String(y)))] +'</b> '+point_s+' within '+y+' km');
+
+}
+
+//Reads in the geojson
+$.getJSON("musgeo.geojson", function(data){
+
+//Applies the functions above to the geojson layer hexgrid and adds it to the map
+hexgrid=L.geoJson(data ,{onEachFeature: onEachHex}).addTo(map);
+
+});
+}
+
+//Calls the mapper function to initialise the map
+mapper(20);
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// The sliders
+/////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// The slider in terms of the radius that the museums are falling within
+//Adds the interactivity in terms of changing the radius that museums fall within. The slider is updated when the mouse dragging has stopped
+slider.addEventListener('mouseup', function(e) {
+        
+        str1="kmpop";      
+        sliderValue.textContent = e.target.value + 'km';
+        xs=e.target.value;
+        //Removes the hexgrid layer that is already on the map
+        map.removeLayer(hexgrid)
+        mapper(xs);
+    	
+});
+
+//Function that changes the opacity of the hexagon layer
+function updateOpacity(value) {
+    hexgrid.setStyle({fillOpacity:value});
+}
+
+
+//The slider for the opacity of the map
+slider2.addEventListener('mouseup', function(s) {
+f=s.target.value;
+sliderValue2.textContent = s.target.value + ' opacity';
+// Calls the function that changes the opacity of the hexagon grid
+updateOpacity(f);
+   });
+
+
+</script>
+</body>
+</html>
